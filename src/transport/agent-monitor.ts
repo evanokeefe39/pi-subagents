@@ -5,13 +5,16 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 30000;
 
 export class AgentMonitor {
   private health = new Map<string, AgentHealth>();
+  private configNames = new Map<string, string>();
   private timers = new Map<string, ReturnType<typeof setInterval>>();
+  private warnings: string[] = [];
   private intervalMs: number;
 
   constructor(config: HttpConfig) {
     this.intervalMs = config.defaults?.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     for (const agent of config.agents) {
       const url = agent.url.replace(/\/+$/, "");
+      if (agent.name) this.configNames.set(url, agent.name);
       this.health.set(url, {
         name: agent.name || url,
         url,
@@ -44,7 +47,10 @@ export class AgentMonitor {
         if (!entry.describe || prev === "unreachable" || prev === "unknown") {
           try {
             entry.describe = await describe(url);
-            entry.name = entry.describe.name || entry.name;
+            const configName = this.configNames.get(url);
+            if (configName && entry.describe.name && configName.toLowerCase() !== entry.describe.name.toLowerCase()) {
+              this.warnings.push(`Agent at ${url}: config name "${configName}" != /describe name "${entry.describe.name}". LLM will use config name.`);
+            }
             if (entry.describe.status === "busy") entry.status = "busy";
             if (entry.describe.status === "starting") entry.status = "starting";
           } catch { /* /describe optional */ }
@@ -67,6 +73,10 @@ export class AgentMonitor {
 
   getAllHealth(): AgentHealth[] {
     return Array.from(this.health.values());
+  }
+
+  getWarnings(): string[] {
+    return [...this.warnings];
   }
 
   isReachable(url: string): boolean {
