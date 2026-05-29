@@ -110,6 +110,44 @@ subagent({
 // All three results in one response — synthesize comparison
 ```
 
+## Structured Output (Workproducts)
+
+When you need structured, machine-readable research output — not prose — include workproduct instructions in the task:
+
+```typescript
+subagent({
+  agent: "researcher",
+  task: `Research faceless Instagram accounts in the finance niche.
+
+For EACH account found, use record_finding to create a structured finding with:
+- claim: the specific factual assertion (e.g. "@account has 1.2M followers")
+- sources: array with source_url, source_type, source_reliability (A-F), information_credibility (1-6)
+- style: "intelligence"
+- topic_tags: ["faceless", "instagram", "finance"]
+- entities: account names, platform names
+
+After recording all findings, publish a summary via write_artifact with type "dataset".`
+})
+```
+
+Without these instructions, agents default to markdown prose. The workproduct/findings system (record_finding, ADMIRALTY grading) is available on research agents but only activates when the task explicitly requests it.
+
+### Artifact type conventions
+
+When delegating tasks that produce artifacts, specify the expected type:
+- `research` — raw findings, analysis, source material
+- `dataset` — structured data (JSON, CSV, JSONL)
+- `report` — final deliverable for humans
+- `brief` — executive summary, short-form output
+
+Example:
+```typescript
+subagent({
+  agent: "writer",
+  task: "Write the final cross-platform comparison report. Publish via write_artifact with type 'report'."
+})
+```
+
 ## Configuration
 
 `~/.pi/agent/extensions/subagent-http/config.json`:
