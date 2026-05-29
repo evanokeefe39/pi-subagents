@@ -1,4 +1,4 @@
-import type { InvokeRequest, InvokeResponse, StatusResponse, ResultResponse } from "./types.ts";
+import type { InvokeRequest, InvokeResponse, StatusResponse, ResultResponse, DescribeResponse } from "./types.ts";
 
 export async function invoke(baseUrl: string, request: InvokeRequest): Promise<InvokeResponse> {
   const url = `${baseUrl.replace(/\/+$/, "")}/invoke`;
@@ -22,6 +22,31 @@ export async function getStatus(baseUrl: string, runId: string): Promise<StatusR
     throw new Error(`GET ${url} returned ${res.status}: ${body}`);
   }
   return res.json() as Promise<StatusResponse>;
+}
+
+export async function describe(baseUrl: string): Promise<DescribeResponse> {
+  const url = `${baseUrl.replace(/\/+$/, "")}/describe`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`GET ${url} returned ${res.status}: ${body}`);
+  }
+  return res.json() as Promise<DescribeResponse>;
+}
+
+export async function cancelRun(baseUrl: string, runId: string): Promise<{ runId: string; state: string }> {
+  const url = `${baseUrl.replace(/\/+$/, "")}/cancel/${encodeURIComponent(runId)}`;
+  const res = await fetch(url, { method: "POST" });
+  if (res.status === 404) throw new Error(`Run ${runId} not found`);
+  if (res.status === 409) {
+    const body = await res.json().catch(() => ({})) as { state?: string };
+    throw new Error(`Run ${runId} already finished (${body.state || "unknown"})`);
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`POST ${url} returned ${res.status}: ${body}`);
+  }
+  return res.json() as Promise<{ runId: string; state: string }>;
 }
 
 export async function getResult(baseUrl: string, runId: string): Promise<ResultResponse> {

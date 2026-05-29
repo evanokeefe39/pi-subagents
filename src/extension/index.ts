@@ -16,9 +16,11 @@ import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-w
 import { Text } from "@earendil-works/pi-tui";
 import { SubagentHttpParams } from "./schemas.ts";
 import { loadConfig } from "./config.ts";
-import type { RemoteRun, RemoteRunState, ResultResponse } from "../transport/types.ts";
+import type { RemoteRun, RemoteRunState, ResultResponse, DescribeResponse } from "../transport/types.ts";
 import { getAgent, listAgents } from "../transport/config.ts";
-import { invoke, getStatus, getResult } from "../transport/http-client.ts";
+import { invoke, getStatus, getResult, describe, cancelRun } from "../transport/http-client.ts";
+import { AgentMonitor } from "../transport/agent-monitor.ts";
+import { randomUUID } from "node:crypto";
 import { JobTracker } from "../transport/job-tracker.ts";
 
 export { loadConfig } from "./config.ts";
@@ -34,6 +36,7 @@ export default function registerSubagentHttpExtension(pi: ExtensionAPI): void {
   const defaultTimeoutMs = config.defaults?.timeoutMs ?? 300000;
   const pollIntervalMs = config.defaults?.pollIntervalMs ?? 3000;
   const tracker = new JobTracker(pollIntervalMs);
+  const monitor = new AgentMonitor(config);
 
   // Register completion notifications
   tracker.onEvent((event) => {
@@ -59,6 +62,7 @@ MANAGEMENT:
 • { action: "list" } — show available remote agents and their URLs
 • { action: "status" } — show all active runs
 • { action: "status", id: "abc" } — check specific run by id or prefix
+• { action: "cancel", id: "abc" } — cancel a running task by id or prefix
 
 Remote agents must implement: POST /invoke (returns 202), GET /status/:runId, GET /result/:runId`,
     parameters: SubagentHttpParams,
@@ -73,7 +77,20 @@ Remote agents must implement: POST /invoke (returns 202), GET /status/:runId, GE
             details: { mode: "management" },
           };
         }
-        const lines = agents.map(a => `• ${a.name} — ${a.url}${a.description ? ` (${a.description})` : ""}`);
+        const lines = agents.map((a) => {
+          const health = monitor.getHealth(a.url);
+          const statusIcon = !health ? "?" : health.status === "ready" ? "●" : health.status === "busy" ? "◐" : health.status === "starting" ? "○" : "✗";
+          const name = health?.describe?.name || health?.name || a.name || a.url;
+          const model = health?.describe?.model || a.model || "";
+          const desc = health?.describe?.description || a.description || "";
+          const caps = health?.describe?.capabilities || "";
+          const parts = [`${statusIcon} ${name} (${a.url})`];
+          if (model) parts[0] += ` [${model}]`;
+          if (desc) parts[0] += ` — ${desc}`;
+          if (caps) parts.push(`    ${caps}`);
+          if (health?.error) parts.push(`    Error: ${health.error}`);
+          return parts.join("\n");
+        });
         return {
           content: [{ type: "text", text: `Remote agents:\n${lines.join("\n")}` }],
           details: { mode: "management" },
@@ -108,14 +125,16 @@ Remote agents must implement: POST /invoke (returns 202), GET /status/:runId, GE
           } catch {
             // connectivity error — show last known state
           }
+          const elapsed = Math.floor((Date.now() - run.startedAt) / 1000);
           const lines = [
             `Run: ${run.runId}`,
             `Agent: ${run.agent} (${run.url})`,
             `State: ${run.state}`,
-            `Started: ${new Date(run.startedAt).toISOString()}`,
-            run.lastCheckedAt ? `Last checked: ${new Date(run.lastCheckedAt).toISOString()}` : null,
+            `Elapsed: ${elapsed}s`,
+            run.result?.model ? `Model: ${run.result.model}` : null,
+            run.result?.usage ? `Usage: ${run.result.usage.input}in/${run.result.usage.output}out, ${run.result.usage.turns} turns` : null,
             run.error ? `Error: ${run.error}` : null,
-            run.result?.output ? `Output:\n${run.result.output}` : null,
+            run.result?.output ? `\nOutput:\n${run.result.output}` : null,
           ].filter(Boolean);
           return {
             content: [{ type: "text", text: lines.join("\n") }],
@@ -140,6 +159,48 @@ Remote agents must implement: POST /invoke (returns 202), GET /status/:runId, GE
         };
       }
 
+      // ACTION: cancel
+      if (params.action === "cancel") {
+        if (!params.id) {
+          return {
+            content: [{ type: "text", text: "action='cancel' requires id." }],
+            isError: true,
+            details: { mode: "management" },
+          };
+        }
+        const run = tracker.get(params.id);
+        if (!run) {
+          return {
+            content: [{ type: "text", text: `No run found matching '${params.id}'` }],
+            isError: true,
+            details: { mode: "management" },
+          };
+        }
+        if (run.state === "completed" || run.state === "failed" || run.state === "timeout") {
+          return {
+            content: [{ type: "text", text: `Run ${run.runId} already finished (${run.state})` }],
+            isError: true,
+            details: { mode: "management" },
+          };
+        }
+        try {
+          await cancelRun(run.url, run.runId);
+          run.state = "failed";
+          run.error = "Cancelled by orchestrator";
+          return {
+            content: [{ type: "text", text: `Cancelled run ${run.runId} (${run.agent})` }],
+            details: { mode: "management", runId: run.runId },
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return {
+            content: [{ type: "text", text: `Failed to cancel run ${run.runId}: ${msg}` }],
+            isError: true,
+            details: { mode: "management" },
+          };
+        }
+      }
+
       // DELEGATION: parallel
       if (params.tasks && params.tasks.length > 0) {
         const results: Array<{ agent: string; runId?: string; error?: string }> = [];
@@ -152,7 +213,8 @@ Remote agents must implement: POST /invoke (returns 202), GET /status/:runId, GE
             return;
           }
           try {
-            const resp = await invoke(endpoint.url, { task: t.task, context: params.context });
+            const correlationId = randomUUID();
+            const resp = await invoke(endpoint.url, { task: t.task, context: params.context, correlationId });
             const run: RemoteRun = {
               runId: resp.runId,
               agent: t.agent,
@@ -197,7 +259,8 @@ Remote agents must implement: POST /invoke (returns 202), GET /status/:runId, GE
           };
         }
         try {
-          const resp = await invoke(endpoint.url, { task: params.task, context: params.context });
+          const correlationId = randomUUID();
+          const resp = await invoke(endpoint.url, { task: params.task, context: params.context, correlationId });
           const run: RemoteRun = {
             runId: resp.runId,
             agent: params.agent,
@@ -237,6 +300,9 @@ Remote agents must implement: POST /invoke (returns 202), GET /status/:runId, GE
         const target = args.id ? ` ${args.id}` : "";
         return new Text(`${theme.fg("toolTitle", theme.bold("subagent "))}status${target}`, 0, 0);
       }
+      if (args.action === "cancel") {
+        return new Text(`${theme.fg("toolTitle", theme.bold("subagent "))}cancel ${args.id ?? "?"}`, 0, 0);
+      }
       if (args.tasks?.length) {
         return new Text(`${theme.fg("toolTitle", theme.bold("subagent "))}parallel (${args.tasks.length})`, 0, 0);
       }
@@ -253,5 +319,6 @@ Remote agents must implement: POST /invoke (returns 202), GET /status/:runId, GE
 
   pi.on("session_shutdown", () => {
     tracker.stop();
+    monitor.stop();
   });
 }

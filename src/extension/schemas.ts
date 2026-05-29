@@ -9,11 +9,11 @@ export const SubagentHttpParams = Type.Object({
   agent: Type.Optional(Type.String({ description: "Agent name for delegation or status target" })),
   task: Type.Optional(Type.String({ description: "Task to delegate to the agent" })),
   action: Type.Optional(Type.String({
-    enum: ["list", "status"],
-    description: "Management action. Omit for delegation mode.",
+    enum: ["list", "status", "cancel"],
+    description: "Management action: list agents, check status, or cancel a run. Omit for delegation mode.",
   })),
   id: Type.Optional(Type.String({
-    description: "Run id or prefix for action='status'",
+    description: "Run id or prefix for action='status' or action='cancel'",
   })),
   tasks: Type.Optional(Type.Array(ParallelTaskItem, {
     description: "PARALLEL mode: delegate to multiple agents concurrently",
