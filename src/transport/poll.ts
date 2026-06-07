@@ -45,10 +45,33 @@ export async function pollUntilDone(opts: PollOptions): Promise<PollResult> {
     }
 
     try {
-      const status = await getStatus(opts.baseUrl, opts.runId);
-      opts.onProgress?.(status.state, elapsed);
+      // Try /status first, fall back to /result (409 = still running)
+      let state: string = "running";
+      try {
+        const status = await getStatus(opts.baseUrl, opts.runId);
+        state = status.state;
+        opts.onProgress?.(state, elapsed);
+      } catch {
+        // /status not implemented — probe /result directly
+        try {
+          const result = await getResult(opts.baseUrl, opts.runId);
+          return {
+            state: result.state as "completed" | "failed",
+            result,
+            error: result.error ?? undefined,
+            durationMs: Date.now() - start,
+          };
+        } catch (resultErr) {
+          const msg = resultErr instanceof Error ? resultErr.message : "";
+          if (msg.includes("still in progress")) {
+            state = "running";
+          } else {
+            // both /status and /result failed — keep polling
+          }
+        }
+      }
 
-      if (status.state === "completed" || status.state === "failed") {
+      if (state === "completed" || state === "failed") {
         try {
           const result = await getResult(opts.baseUrl, opts.runId);
           return {
@@ -59,8 +82,8 @@ export async function pollUntilDone(opts: PollOptions): Promise<PollResult> {
           };
         } catch {
           return {
-            state: status.state as "completed" | "failed",
-            error: status.state === "failed" ? "Failed (result fetch error)" : undefined,
+            state: state as "completed" | "failed",
+            error: state === "failed" ? "Failed (result fetch error)" : undefined,
             durationMs: Date.now() - start,
           };
         }

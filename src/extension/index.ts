@@ -195,13 +195,12 @@ OPTIONAL:
         }
         try {
           await cancelRun(run.url, run.runId);
-          run.state = "failed";
-          run.error = "Cancelled by orchestrator";
-          return { content: [{ type: "text", text: `Cancelled run ${run.runId} (${run.agent})` }], details: { mode: "management", runId: run.runId } };
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return { content: [{ type: "text", text: `Failed to cancel run ${run.runId}: ${msg}` }], isError: true, details: { mode: "management" } };
+        } catch {
+          // /cancel not implemented — mark locally anyway
         }
+        run.state = "failed";
+        run.error = "Cancelled by orchestrator";
+        return { content: [{ type: "text", text: `Cancelled run ${run.runId} (${run.agent})` }], details: { mode: "management", runId: run.runId } };
       }
 
       // DELEGATION: parallel
