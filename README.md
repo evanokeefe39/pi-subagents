@@ -33,18 +33,37 @@ Create `~/.pi/agent/extensions/subagent-http/config.json`:
 ```json
 {
   "agents": [
-    { "name": "researcher", "url": "http://localhost:8082" },
-    { "name": "data", "url": "http://localhost:8083" },
-    { "name": "writer", "url": "http://localhost:8084" }
+    {
+      "name": "researcher",
+      "url": "http://localhost:8082",
+      "description": "Optional fallback if /describe unavailable",
+      "timeoutMs": 600000,
+      "heartbeat": false,
+      "transport": "sse"
+    }
   ],
   "defaults": {
     "timeoutMs": 300000,
-    "pollIntervalMs": 3000
+    "pollIntervalMs": 3000,
+    "heartbeatIntervalMs": 30000,
+    "transport": "sse"
+  },
+  "commands": {
+    "enabled": true,
+    "aliases": {
+      "re": "researcher",
+      "wr": "writer"
+    }
+  },
+  "shortcuts": {
+    "ctrl+1": "planner",
+    "ctrl+2": "researcher",
+    "ctrl+3": "writer"
   }
 }
 ```
 
-Per-agent options: `timeoutMs` (override default), `heartbeat: false` (disable health monitoring).
+Per-agent options: `timeoutMs` (override default), `heartbeat: false` (disable health monitoring), `transport` (`"sse"` or `"poll"`).
 
 ## Usage
 
@@ -93,6 +112,52 @@ subagent({ action: "status", id: "abc123" })   // specific run
 subagent({ action: "cancel", id: "abc123" })   // cancel running task
 ```
 
+### Slash commands
+
+Each configured agent is automatically registered as a pi slash command:
+
+```
+/researcher find local businesses with good reviews and no website
+/writer create a professional 3-page report from this research
+/planner deep research this topic and produce a final deliverable
+```
+
+Commands bypass the LLM — input goes directly to the named agent. Results are injected into the conversation when the agent completes.
+
+**Aliases** shorten frequently-used commands:
+
+```json
+{
+  "commands": {
+    "aliases": {
+      "re": "researcher",
+      "wr": "writer",
+      "pl": "planner"
+    }
+  }
+}
+```
+
+Then `/re find local businesses...` works identically to `/researcher find local businesses...`.
+
+Disable commands globally with `"commands": { "enabled": false }`.
+
+### Keyboard shortcuts
+
+Bind keys to send the current editor text to an agent:
+
+```json
+{
+  "shortcuts": {
+    "ctrl+1": "planner",
+    "ctrl+2": "researcher",
+    "ctrl+3": "writer"
+  }
+}
+```
+
+Type a task in the editor, press the shortcut — the editor clears and the task is dispatched to the agent.
+
 ## Server Contract
 
 Each remote agent must expose:
@@ -110,6 +175,21 @@ States: `queued`, `running`, `completed`, `failed`, `timeout`, `cancelled`.
 
 `/result/:runId` returns 404 if unknown, 409 if still running.
 
+### Transport
+
+The extension connects to `GET /events` (SSE) on first delegation for real-time completion notifications. If the server doesn't support SSE, it falls back to adaptive polling automatically.
+
+Override per-agent or globally:
+
+```json
+{
+  "defaults": { "transport": "sse" },
+  "agents": [
+    { "name": "legacy-agent", "url": "http://...", "transport": "poll" }
+  ]
+}
+```
+
 ## Architecture
 
 ```
@@ -119,9 +199,8 @@ Pi Session (orchestrator)
       │
       ├─ POST /invoke → 202 { runId }
       │
-      ├─ [extension polls internally — adaptive backoff]
-      │   └─ GET /status/:runId → { state: "running" }
-      │   └─ GET /status/:runId → { state: "completed" }
+      ├─ [SSE: GET /events — real-time completion notification]
+      │   └─ fallback: adaptive polling GET /status/:runId
       │
       ├─ GET /result/:runId → { output, usage, model }
       │

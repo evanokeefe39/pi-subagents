@@ -17,10 +17,12 @@ Pi CLI (Node v22)
        ├─ single:   { agent, task }              → blocks until done
        ├─ parallel:  { tasks: [...] }             → blocks until all done
        ├─ async:     { agent, task, async: true }  → fire-and-forget
-       └─ management: { action: "list"|"status"|"cancel" }
+       ├─ management: { action: "list"|"status"|"cancel" }
+       └─ slash commands: /researcher, /writer, etc. → bypass LLM, direct dispatch
 
 Transport layer (src/transport/)
-  └─ POST /invoke (202) → poll GET /status/:runId → GET /result/:runId
+  └─ SSE primary: POST /invoke (202) → GET /events (SSE) → GET /result/:runId
+     Polling fallback: POST /invoke (202) → poll GET /status/:runId → GET /result/:runId
 ```
 
 Config lives at `~/.pi/agent/extensions/subagent-http/config.json` — defines agent endpoints and defaults.
@@ -36,8 +38,10 @@ Config lives at `~/.pi/agent/extensions/subagent-http/config.json` — defines a
 | `src/transport/poll.ts` | Adaptive polling with configurable tiers |
 | `src/transport/agent-monitor.ts` | Health monitoring for remote agents |
 | `src/transport/job-tracker.ts` | Tracks in-flight async jobs |
+| `src/transport/sse-client.ts` | SSE transport — connects to GET /events for real-time notifications |
 | `src/transport/config.ts` | Loads agent endpoint config from disk |
 | `src/transport/types.ts` | Shared TypeScript types |
+| `src/extension/commands.ts` | Slash command registration and alias resolution |
 | `src/runs/shared/` | Shared run utilities |
 | `CONTRACT.md` | Server API contract — remote agents must implement this |
 | `skills/` | Pi skills bundled with the extension |
@@ -58,3 +62,5 @@ Unit tests live in `test/unit/`. No integration test harness currently exists.
 - Pi SDK runs extensions in Node v22 (not Bun) — do not use Bun-specific APIs.
 - Health monitoring config is per-agent in `config.json` — monitor intervals and thresholds are separate from poll intervals.
 - `CONTRACT.md` is the source of truth for the remote agent HTTP API. Update it when changing transport behavior.
+- SSE transport connects once per delegation cycle via `GET /events`. Falls back to polling if the server returns non-200. Per-agent override: `"transport": "poll"` in config.
+- OTel traceparent is propagated to remote agents via the `traceparent` field in the `/invoke` request body. Enables cross-agent distributed tracing when agents forward the header to downstream services.
