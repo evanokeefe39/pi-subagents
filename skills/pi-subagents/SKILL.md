@@ -155,20 +155,56 @@ subagent({
 ```json
 {
   "agents": [
-    { "name": "researcher", "url": "http://localhost:8082" },
-    { "name": "data", "url": "http://localhost:8083" },
-    { "name": "writer", "url": "http://localhost:8084" }
+    {
+      "name": "researcher",
+      "url": "http://localhost:8082",
+      "description": "Optional fallback if /describe unavailable",
+      "timeoutMs": 600000,
+      "heartbeat": false,
+      "transport": "sse"
+    }
   ],
   "defaults": {
     "timeoutMs": 300000,
-    "pollIntervalMs": 3000
+    "pollIntervalMs": 3000,
+    "heartbeatIntervalMs": 30000,
+    "transport": "sse"
+  },
+  "commands": {
+    "enabled": true,
+    "aliases": {
+      "re": "researcher",
+      "wr": "writer"
+    }
+  },
+  "shortcuts": {
+    "ctrl+1": "planner",
+    "ctrl+2": "researcher",
+    "ctrl+3": "writer"
   }
 }
 ```
 
-Agent names in config are the names you use in `subagent()` calls. Health and capabilities are discovered via `GET /describe` on each URL.
+Agent names in config are the names you use in `subagent()` calls and slash commands. Health and capabilities are discovered via `GET /describe` on each URL.
 
-Per-agent options: `timeoutMs`, `heartbeat: false` (disable health monitoring).
+Per-agent options: `timeoutMs`, `heartbeat: false` (disable health monitoring), `transport` (`"sse"` or `"poll"`).
+
+## Slash Commands
+
+Each configured agent is also available as a slash command. Instead of calling the tool, you can use:
+
+```
+/researcher find local businesses with good reviews and no website
+/writer create a professional 3-page report from this research
+/planner deep research this topic and produce a final deliverable
+```
+
+Slash commands bypass the LLM and send input directly to the named agent. Use them when the task is straightforward and doesn't need orchestration logic. Aliases may be configured (e.g. `/re` for `/researcher`).
+
+The `subagent()` tool is still preferred when you need to:
+- Run multiple agents in parallel via `tasks: [...]`
+- Include structured `context` alongside the task
+- Use async mode or management actions (list, status, cancel)
 
 ## Important Constraints
 
